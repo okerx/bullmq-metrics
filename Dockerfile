@@ -1,0 +1,17 @@
+FROM oven/bun:1.3.11-alpine AS base
+WORKDIR /usr/src/app
+
+FROM base AS install
+RUN mkdir -p /temp/prod
+COPY package.json bun.lock /temp/prod/
+RUN cd /temp/prod && bun install --frozen-lockfile --production
+
+FROM base AS release
+ENV NODE_ENV=production
+COPY --from=install /temp/prod/node_modules node_modules
+COPY ./index.ts .
+COPY ./package.json .
+
+USER bun
+EXPOSE 3030/tcp
+ENTRYPOINT [ "bun", "run", "index.ts" ]
