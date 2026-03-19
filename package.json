@@ -2,7 +2,7 @@
   "name": "bullmq-metrics",
   "description": "Prometheus exporter for BullMQ queue metrics",
   "module": "src/index.ts",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@semantic-release/changelog": "^6.0.3",
