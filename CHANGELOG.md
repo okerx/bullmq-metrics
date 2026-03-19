@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/okerx/bullmq-metrics/compare/v1.1.0...v1.2.0) (2026-03-19)
+
+### Features
+
+* integrate prom-client for enhanced Prometheus metrics ([100f2f5](https://github.com/okerx/bullmq-metrics/commit/100f2f5737239ddf28564770f675774d8424460c))
+
 ## [1.1.0](https://github.com/okerx/bullmq-metrics/compare/v1.0.1...v1.1.0) (2026-03-19)
 
 ### Features
