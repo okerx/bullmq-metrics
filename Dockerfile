@@ -9,9 +9,9 @@ RUN cd /temp/prod && bun install --frozen-lockfile --production
 FROM base AS release
 ENV NODE_ENV=production
 COPY --from=install /temp/prod/node_modules node_modules
-COPY ./index.ts .
+COPY ./src ./src
 COPY ./package.json .
 
 USER bun
 EXPOSE 3030/tcp
-ENTRYPOINT [ "bun", "run", "index.ts" ]
+ENTRYPOINT [ "bun", "run", "src/index.ts" ]

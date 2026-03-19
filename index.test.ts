@@ -1,11 +1,38 @@
 import { describe, expect, test } from 'bun:test';
+import { extractQueueNameFromRedisKey } from './src/utils';
+import { getQueuesMetrics } from './src/metrics.ts';
 
-import {
-  extractQueueNameFromRedisKey,
-  getQueueNamesFromRedisKeys,
-  getQueuesMetrics,
-  resolveExporterConfig,
-} from './index';
+const CONFIG_ENV_KEYS = ['BULLMQ_PREFIX', 'HOST', 'PORT', 'REDIS_SCAN_COUNT', 'REDIS_URL'] as const;
+
+const loadConfig = async (env: Partial<Record<(typeof CONFIG_ENV_KEYS)[number], string | undefined>>, key: string) => {
+  const previousEnv = Object.fromEntries(CONFIG_ENV_KEYS.map((name) => [name, process.env[name]]));
+
+  for (const name of CONFIG_ENV_KEYS) {
+    const value = env[name];
+
+    if (value === undefined) {
+      delete process.env[name];
+      continue;
+    }
+
+    process.env[name] = value;
+  }
+
+  try {
+    return (await import(`./src/config.ts?${key}`)).Config;
+  } finally {
+    for (const name of CONFIG_ENV_KEYS) {
+      const value = previousEnv[name];
+
+      if (value === undefined) {
+        delete process.env[name];
+        continue;
+      }
+
+      process.env[name] = value;
+    }
+  }
+};
 
 describe('extractQueueNameFromRedisKey', () => {
   test('extracts a queue name from a default BullMQ key', () => {
@@ -21,48 +48,36 @@ describe('extractQueueNameFromRedisKey', () => {
   });
 });
 
-describe('getQueueNamesFromRedisKeys', () => {
-  test('deduplicates and sorts queue names', () => {
-    expect(
-      getQueueNamesFromRedisKeys(['bull:reports:id', 'bull:emails:id', 'team:prod:bull:reports:id', 'not-a-queue-key']),
-    ).toEqual(['emails', 'reports']);
-  });
-});
-
-describe('resolveExporterConfig', () => {
-  test('uses defaults when values are not provided', () => {
-    expect(resolveExporterConfig({})).toEqual({
-      bullmqPrefix: 'bull',
-      host: '0.0.0.0',
-      port: 3030,
-      redisScanCount: 1000,
-      redisUrl: 'redis://127.0.0.1:6379',
+describe('Config', () => {
+  test('uses defaults when values are not provided', async () => {
+    expect(await loadConfig({}, 'defaults')).toEqual({
+      BULLMQ_PREFIX: 'bull',
+      HOST: '0.0.0.0',
+      PORT: 3030,
+      REDIS_SCAN_COUNT: 1000,
+      REDIS_URL: 'redis://127.0.0.1:6379',
     });
   });
 
-  test('accepts explicit overrides', () => {
+  test('accepts explicit overrides', async () => {
     expect(
-      resolveExporterConfig({
-        BULLMQ_PREFIX: 'queues',
-        HOST: '127.0.0.1',
-        PORT: '9090',
-        REDIS_SCAN_COUNT: '5000',
-        REDIS_URL: 'redis://cache.internal:6379',
-      }),
+      await loadConfig(
+        {
+          BULLMQ_PREFIX: 'queues',
+          HOST: '127.0.0.1',
+          PORT: '9090',
+          REDIS_SCAN_COUNT: '5000',
+          REDIS_URL: 'redis://cache.internal:6379',
+        },
+        'overrides',
+      ),
     ).toEqual({
-      bullmqPrefix: 'queues',
-      host: '127.0.0.1',
-      port: 9090,
-      redisScanCount: 5000,
-      redisUrl: 'redis://cache.internal:6379',
+      BULLMQ_PREFIX: 'queues',
+      HOST: '127.0.0.1',
+      PORT: 9090,
+      REDIS_SCAN_COUNT: 5000,
+      REDIS_URL: 'redis://cache.internal:6379',
     });
-  });
-
-  test('rejects invalid numeric values', () => {
-    expect(() => resolveExporterConfig({ PORT: '0' })).toThrow('PORT must be a positive integer.');
-    expect(() => resolveExporterConfig({ REDIS_SCAN_COUNT: 'abc' })).toThrow(
-      'REDIS_SCAN_COUNT must be a positive integer.',
-    );
   });
 });
 

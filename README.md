@@ -4,6 +4,8 @@ Small Prometheus exporter for [BullMQ](https://bullmq.io/) queues.
 
 The service connects to Redis, discovers BullMQ queues for a configured prefix, and exposes the built-in BullMQ queue metrics on `/metrics` in Prometheus text format.
 
+The application entrypoint lives at `src/index.ts`, with environment-driven runtime settings in `src/config.ts`.
+
 ## Features
 
 - Auto-discovers queues from Redis instead of hard-coding queue names.
