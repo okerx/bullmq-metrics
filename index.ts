@@ -77,33 +77,28 @@ export const getQueuesMetrics = async (queues: string[], config = resolveExporte
 export const scanForQueues = async (config = resolveExporterConfig()) => {
   const queueNames = new Set<string>();
   let cursor = '0';
+  do {
+    const [nextCursor, scannedKeys] = await redis.scan(
+      cursor,
+      'MATCH',
+      `${config.bullmqPrefix}:*:id`,
+      'COUNT',
+      config.redisScanCount,
+      'TYPE',
+      'string',
+    );
 
-  try {
-    do {
-      const [nextCursor, scannedKeys] = await redis.scan(
-        cursor,
-        'MATCH',
-        `${config.bullmqPrefix}:*:id`,
-        'COUNT',
-        config.redisScanCount,
-        'TYPE',
-        'string',
-      );
+    cursor = nextCursor;
 
-      cursor = nextCursor;
-
-      for (const key of scannedKeys) {
-        const queueName = extractQueueNameFromRedisKey(key);
-        if (queueName) {
-          queueNames.add(queueName);
-        }
+    for (const key of scannedKeys) {
+      const queueName = extractQueueNameFromRedisKey(key);
+      if (queueName) {
+        queueNames.add(queueName);
       }
-    } while (cursor !== '0');
+    }
+  } while (cursor !== '0');
 
-    return [...queueNames].sort();
-  } finally {
-    redis.close();
-  }
+  return [...queueNames].sort();
 };
 
 export const serveExporter = (config = resolveExporterConfig()) =>
