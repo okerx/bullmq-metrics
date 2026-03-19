@@ -1,17 +1,14 @@
 # bullmq-metrics
 
-Small Prometheus exporter for [BullMQ](https://bullmq.io/) queues.
+Prometheus exporter for [BullMQ](https://bullmq.io/) queues.
 
-The service connects to Redis, discovers BullMQ queues for a configured prefix, and exposes the built-in BullMQ queue metrics on `/metrics` in Prometheus text format.
-
-The application entrypoint lives at `src/index.ts`, with environment-driven runtime settings in `src/config.ts`.
+The service connects to Redis, discovers BullMQ queues for a configured prefix, and exposes the BullMQ queue metrics on `/metrics` in Prometheus text format.
 
 ## Features
 
-- Auto-discovers queues from Redis instead of hard-coding queue names.
-- Exposes BullMQ Prometheus metrics over HTTP.
-- Supports custom Redis URLs and BullMQ prefixes.
-- Ships with Bun-based local development, Docker support, tests, linting, and CI.
+- 🕵️‍♂️ Auto-discovers queues from Redis.
+- 🌐 Exposes BullMQ Prometheus metrics over HTTP.
+- 🚢 Ships with Bun-based runtime, and a Docker image.
 
 ## Requirements
 
@@ -68,12 +65,9 @@ scrape_configs:
 
 ## Exposed Metrics
 
-The exporter preserves BullMQ's built-in queue state gauge:
+The exporter exposes queue-level series derived from BullMQ's stored history:
 
 - `bullmq_job_count{queue, state}`
-
-It also adds queue-level series derived from BullMQ's stored history:
-
 - `bullmq_jobs_completed_total{queue}`
 - `bullmq_jobs_failed_total{queue}`
 - `bullmq_jobs_completed_last_minute{queue}`
@@ -87,7 +81,7 @@ It also adds queue-level series derived from BullMQ's stored history:
 An importable Grafana dashboard is available at [`grafana/dashboards/bullmq-overview.json`](./grafana/dashboards/bullmq-overview.json).
 
 - Import the JSON through Grafana's dashboard import flow.
-- Grafana should prompt for a Prometheus data source because the dashboard is packaged with a `DS_PROMETHEUS` input instead of a hard-coded data source UID.
+- Grafana should prompt for a Prometheus data source.
 - Use the `Queue` variable to filter the dashboard to one queue, many queues, or the entire fleet.
 
 ### BullMQ Worker Prerequisite
@@ -97,12 +91,12 @@ BullMQ only populates completion and failure history if your workers enable metr
 Example worker configuration:
 
 ```ts
-import { Worker } from 'bullmq';
+import { Worker, MetricsTime } from 'bullmq';
 
 new Worker('email', processor, {
   connection: { url: process.env.REDIS_URL },
   metrics: {
-    maxDataPoints: 1440,
+    maxDataPoints: MetricsTime.ONE_WEEK * 2,
   },
 });
 ```
@@ -124,12 +118,6 @@ docker run --rm \
   bullmq-metrics
 ```
 
-## Releases
-
-- Pushes to `main` are released automatically with semantic-release.
-- Pull requests targeting `main` must use a Conventional Commit title and should be squash-merged.
-- Direct pushes to `main` must also use Conventional Commit messages.
-- Release automation updates `package.json`, maintains `CHANGELOG.md`, creates a GitHub Release, and then publishes Docker tags from the release event.
 
 ## Development
 
@@ -143,10 +131,9 @@ Quality checks:
 bun run check
 ```
 
-Individual commands:
+Other commands:
 
 ```bash
-bun run format
 bun run lint
 bun run typecheck
 bun test
