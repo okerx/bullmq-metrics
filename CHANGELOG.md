@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/okerx/bullmq-metrics/compare/v1.0.1...v1.1.0) (2026-03-19)
+
+### Features
+
+* add extra Prometheus metrics exporter and Grafana dashboard integration for BullMQ ([dcf4275](https://github.com/okerx/bullmq-metrics/commit/dcf427582f094523baf89343caba2ce4b6f59210))
+
 ## [1.0.1](https://github.com/okerx/bullmq-metrics/compare/v1.0.0...v1.0.1) (2026-03-19)
 
 ### Bug Fixes
