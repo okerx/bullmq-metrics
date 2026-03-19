@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
+import type { Metrics } from 'bullmq';
 import { extractQueueNameFromRedisKey } from './src/utils';
 import { getQueuesMetrics } from './src/metrics.ts';
 
@@ -82,7 +83,137 @@ describe('Config', () => {
 });
 
 describe('getQueuesMetrics', () => {
-  test('returns an empty payload when no queues are provided', async () => {
-    expect(getQueuesMetrics([])).resolves.toBe('');
+  const createBullMqMetrics = ({
+    lastMinute,
+    points = lastMinute === undefined ? 0 : 1,
+    total,
+  }: {
+    lastMinute?: number;
+    points?: number;
+    total: number;
+  }): Metrics => ({
+    meta: {
+      count: total,
+      prevCount: 0,
+      prevTS: 0,
+    },
+    data: lastMinute === undefined ? [] : [lastMinute],
+    count: points,
+  });
+
+  const mockQueueModule = (
+    payloads: Record<
+      string,
+      {
+        completedMetrics: Metrics;
+        failedMetrics: Metrics;
+        jobCountMetrics: string;
+      }
+    >,
+  ) => {
+    const closedQueues: string[] = [];
+
+    mock.module('bullmq', () => ({
+      Queue: class {
+        queueName: string;
+
+        constructor(queueName: string) {
+          this.queueName = queueName;
+        }
+
+        async close() {
+          closedQueues.push(this.queueName);
+        }
+
+        async exportPrometheusMetrics() {
+          const payload = payloads[this.queueName];
+
+          if (!payload) {
+            throw new Error(`Missing test payload for queue ${this.queueName}`);
+          }
+
+          return payload.jobCountMetrics;
+        }
+
+        async getMetrics(type: 'completed' | 'failed') {
+          const payload = payloads[this.queueName];
+
+          if (!payload) {
+            throw new Error(`Missing test payload for queue ${this.queueName}`);
+          }
+
+          return type === 'completed' ? payload.completedMetrics : payload.failedMetrics;
+        }
+      },
+    }));
+
+    return { closedQueues };
+  };
+
+  test('returns the exporter gauge when no queues are provided', async () => {
+    expect(getQueuesMetrics([])).resolves.toBe(
+      [
+        '# HELP bullmq_exporter_queues_discovered Number of BullMQ queues discovered during the last scrape',
+        '# TYPE bullmq_exporter_queues_discovered gauge',
+        'bullmq_exporter_queues_discovered 0',
+      ].join('\n'),
+    );
+  });
+
+  test('renders built-in queue metrics alongside derived BullMQ history metrics', async () => {
+    const { closedQueues } = mockQueueModule({
+      analytics: {
+        completedMetrics: createBullMqMetrics({ lastMinute: 3, points: 1440, total: 125 }),
+        failedMetrics: createBullMqMetrics({ lastMinute: 1, points: 1440, total: 5 }),
+        jobCountMetrics: [
+          '# HELP bullmq_job_count Number of jobs in the queue by state',
+          '# TYPE bullmq_job_count gauge',
+          'bullmq_job_count{queue="analytics", state="active"} 2',
+        ].join('\n'),
+      },
+      email: {
+        completedMetrics: createBullMqMetrics({ lastMinute: 14, points: 1440, total: 326 }),
+        failedMetrics: createBullMqMetrics({ lastMinute: 0, points: 1440, total: 0 }),
+        jobCountMetrics: [
+          '# HELP bullmq_job_count Number of jobs in the queue by state',
+          '# TYPE bullmq_job_count gauge',
+          'bullmq_job_count{queue="email", state="waiting"} 4',
+        ].join('\n'),
+      },
+    });
+
+    const metrics = await getQueuesMetrics(['analytics', 'email']);
+
+    expect(metrics).toContain('bullmq_job_count{queue="analytics", state="active"} 2');
+    expect(metrics).toContain('bullmq_job_count{queue="email", state="waiting"} 4');
+    expect(metrics).not.toContain('bullmq_jobs_completed_total');
+    expect(metrics).not.toContain('bullmq_jobs_failed_total');
+    expect(metrics).toContain('bullmq_jobs_completed_last_minute{queue="analytics"} 3');
+    expect(metrics).toContain('bullmq_jobs_completed_last_minute{queue="email"} 14');
+    expect(metrics).toContain('bullmq_jobs_failed_last_minute{queue="analytics"} 1');
+    expect(metrics).toContain('bullmq_jobs_failed_last_minute{queue="email"} 0');
+    expect(metrics).toContain('bullmq_exporter_queues_discovered 2');
+    expect(closedQueues.toSorted()).toEqual(['analytics', 'email']);
+  });
+
+  test('gracefully emits queue state metrics when BullMQ worker history metrics are missing', async () => {
+    mockQueueModule({
+      invoices: {
+        completedMetrics: createBullMqMetrics({ total: 0 }),
+        failedMetrics: createBullMqMetrics({ total: 0 }),
+        jobCountMetrics: [
+          '# HELP bullmq_job_count Number of jobs in the queue by state',
+          '# TYPE bullmq_job_count gauge',
+          'bullmq_job_count{queue="invoices", state="failed"} 7',
+        ].join('\n'),
+      },
+    });
+
+    const metrics = await getQueuesMetrics(['invoices']);
+
+    expect(metrics).toContain('bullmq_job_count{queue="invoices", state="failed"} 7');
+    expect(metrics).toContain('bullmq_jobs_completed_last_minute{queue="invoices"} 0');
+    expect(metrics).toContain('bullmq_jobs_failed_last_minute{queue="invoices"} 0');
+    expect(metrics).toContain('bullmq_exporter_queues_discovered 1');
   });
 });

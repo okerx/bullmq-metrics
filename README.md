@@ -66,6 +66,47 @@ scrape_configs:
           - localhost:3030
 ```
 
+## Exposed Metrics
+
+The exporter preserves BullMQ's built-in queue state gauge:
+
+- `bullmq_job_count{queue, state}`
+
+It also adds queue-level series derived from BullMQ's stored history:
+
+- `bullmq_jobs_completed_total{queue}`
+- `bullmq_jobs_failed_total{queue}`
+- `bullmq_jobs_completed_last_minute{queue}`
+- `bullmq_jobs_failed_last_minute{queue}`
+- `bullmq_exporter_queues_discovered`
+
+`bullmq_jobs_*` is sourced from `queue.getMetrics(...)`. BullMQ stores the total finished job count in `meta.count` and the most recent one-minute bucket in `data[0]`.
+
+## Grafana Dashboard
+
+An importable Grafana dashboard is available at [`grafana/dashboards/bullmq-overview.json`](./grafana/dashboards/bullmq-overview.json).
+
+- Import the JSON through Grafana's dashboard import flow.
+- Grafana should prompt for a Prometheus data source because the dashboard is packaged with a `DS_PROMETHEUS` input instead of a hard-coded data source UID.
+- Use the `Queue` variable to filter the dashboard to one queue, many queues, or the entire fleet.
+
+### BullMQ Worker Prerequisite
+
+BullMQ only populates completion and failure history if your workers enable metrics collection. Without that, queue state panels still work, but throughput and failure-history panels will stay empty or zero.
+
+Example worker configuration:
+
+```ts
+import { Worker } from 'bullmq';
+
+new Worker('email', processor, {
+  connection: { url: process.env.REDIS_URL },
+  metrics: {
+    maxDataPoints: 1440,
+  },
+});
+```
+
 ## Docker
 
 Build:
