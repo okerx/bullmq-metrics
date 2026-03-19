@@ -1,3 +1,4 @@
+import { prometheusContentType } from 'prom-client';
 import { Config } from './config';
 import { getMetrics } from './metrics.ts';
 import { health } from './health.ts';
@@ -10,7 +11,7 @@ const server = Bun.serve({
     '/healthz': async () => Response.json(...(await health())),
     '/metrics': async () => {
       try {
-        return new Response(await getMetrics());
+        return new Response(await getMetrics(), { headers: { 'Content-Type': prometheusContentType } });
       } catch (error) {
         console.error('Failed to collect BullMQ metrics.', error);
         return new Response('Failed to collect BullMQ metrics.\n', { status: 500 });

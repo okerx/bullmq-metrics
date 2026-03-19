@@ -1,87 +1,109 @@
 import { redis } from 'bun';
 import { Queue, type Metrics } from 'bullmq';
+import { Counter, Gauge, Registry } from 'prom-client';
 import { Config } from './config.ts';
 import { extractQueueNameFromRedisKey } from './utils.ts';
 
 type QueueMetricsSnapshot = {
   completedMetrics: Metrics;
   failedMetrics: Metrics;
-  jobCountMetrics: string;
+  jobCounts: Record<string, number>;
   queueName: string;
 };
 
-const escapePrometheusLabelValue = (value: string) =>
-  value.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('"', '\\"');
+const createQueueClient = (queueName: string) =>
+  new Queue(queueName, { connection: { url: Config.REDIS_URL }, prefix: Config.BULLMQ_PREFIX });
 
-const getQueueMetricsSnapshot = async (queueName: string): Promise<QueueMetricsSnapshot> => {
-  const queue = new Queue(queueName, { connection: { url: Config.REDIS_URL }, prefix: Config.BULLMQ_PREFIX });
+const getQueueMetricsSnapshot = async (
+  queueName: string,
+  queueClientFactory = createQueueClient,
+): Promise<QueueMetricsSnapshot> => {
+  const queue = queueClientFactory(queueName);
 
   try {
-    const [jobCountMetrics, completedMetrics, failedMetrics] = await Promise.all([
-      queue.exportPrometheusMetrics(),
+    const [jobCounts, completedMetrics, failedMetrics] = await Promise.all([
+      queue.getJobCounts(),
       queue.getMetrics('completed'),
       queue.getMetrics('failed'),
     ]);
 
-    return { completedMetrics, failedMetrics, jobCountMetrics, queueName };
+    return { completedMetrics, failedMetrics, jobCounts, queueName };
   } finally {
     await queue.close();
   }
 };
 
-const renderMetricFamily = (name: string, help: string, type: 'counter' | 'gauge', samples: string[]) => {
-  if (samples.length === 0) {
-    return '';
-  }
-
-  return [`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`, ...samples].join('\n');
-};
+const getTotalJobsCount = (metrics: Metrics) => metrics.meta.count;
 
 const getLastMinuteJobsCount = (metrics: Metrics) => metrics.data[0] ?? 0;
 
-const renderQueueSample = (name: string, queueName: string, value: number) =>
-  `${name}{queue="${escapePrometheusLabelValue(queueName)}"} ${value}`;
+const createMetricsRegistry = (metrics: QueueMetricsSnapshot[], queuesDiscovered: number) => {
+  const registry = new Registry();
 
-const renderMetricsPayload = (metrics: QueueMetricsSnapshot[], queuesDiscovered: number) => {
-  const sections = metrics.map(({ jobCountMetrics }) => jobCountMetrics);
+  const queuesDiscoveredGauge = new Gauge({
+    help: 'Number of BullMQ queues discovered during the last scrape',
+    name: 'bullmq_exporter_queues_discovered',
+    registers: [registry],
+  });
 
-  sections.push(
-    renderMetricFamily(
-      'bullmq_jobs_completed_last_minute',
-      'Number of BullMQ jobs completed during the latest one-minute bucket by queue',
-      'gauge',
-      metrics.map(({ queueName, completedMetrics }) =>
-        renderQueueSample('bullmq_jobs_completed_last_minute', queueName, getLastMinuteJobsCount(completedMetrics)),
-      ),
-    ),
-  );
+  queuesDiscoveredGauge.set(queuesDiscovered);
 
-  sections.push(
-    renderMetricFamily(
-      'bullmq_jobs_failed_last_minute',
-      'Number of BullMQ jobs failed during the latest one-minute bucket by queue',
-      'gauge',
-      metrics.map(({ queueName, failedMetrics }) =>
-        renderQueueSample('bullmq_jobs_failed_last_minute', queueName, getLastMinuteJobsCount(failedMetrics)),
-      ),
-    ),
-  );
+  if (metrics.length === 0) {
+    return registry;
+  }
 
-  sections.push(
-    renderMetricFamily(
-      'bullmq_exporter_queues_discovered',
-      'Number of BullMQ queues discovered during the last scrape',
-      'gauge',
-      [`bullmq_exporter_queues_discovered ${queuesDiscovered}`],
-    ),
-  );
+  const jobCountGauge = new Gauge<'queue' | 'state'>({
+    help: 'Number of jobs in the queue by state',
+    labelNames: ['queue', 'state'],
+    name: 'bullmq_job_count',
+    registers: [registry],
+  });
 
-  return sections.filter(Boolean).join('\n\n');
+  const completedTotalCounter = new Counter<'queue'>({
+    help: 'Total number of BullMQ jobs completed by queue',
+    labelNames: ['queue'],
+    name: 'bullmq_jobs_completed_total',
+    registers: [registry],
+  });
+
+  const failedTotalCounter = new Counter<'queue'>({
+    help: 'Total number of BullMQ jobs failed by queue',
+    labelNames: ['queue'],
+    name: 'bullmq_jobs_failed_total',
+    registers: [registry],
+  });
+
+  const completedLastMinuteGauge = new Gauge<'queue'>({
+    help: 'Number of BullMQ jobs completed during the latest one-minute bucket by queue',
+    labelNames: ['queue'],
+    name: 'bullmq_jobs_completed_last_minute',
+    registers: [registry],
+  });
+
+  const failedLastMinuteGauge = new Gauge<'queue'>({
+    help: 'Number of BullMQ jobs failed during the latest one-minute bucket by queue',
+    labelNames: ['queue'],
+    name: 'bullmq_jobs_failed_last_minute',
+    registers: [registry],
+  });
+
+  for (const { completedMetrics, failedMetrics, jobCounts, queueName } of metrics) {
+    for (const [state, count] of Object.entries(jobCounts)) {
+      jobCountGauge.set({ queue: queueName, state }, count);
+    }
+
+    completedTotalCounter.inc({ queue: queueName }, getTotalJobsCount(completedMetrics));
+    failedTotalCounter.inc({ queue: queueName }, getTotalJobsCount(failedMetrics));
+    completedLastMinuteGauge.set({ queue: queueName }, getLastMinuteJobsCount(completedMetrics));
+    failedLastMinuteGauge.set({ queue: queueName }, getLastMinuteJobsCount(failedMetrics));
+  }
+
+  return registry;
 };
 
-export const getQueuesMetrics = async (queues: string[]) => {
-  const metrics = await Promise.all(queues.map((queueName) => getQueueMetricsSnapshot(queueName)));
-  return renderMetricsPayload(metrics, queues.length);
+export const getQueuesMetrics = async (queues: string[], queueClientFactory = createQueueClient) => {
+  const metrics = await Promise.all(queues.map((queueName) => getQueueMetricsSnapshot(queueName, queueClientFactory)));
+  return createMetricsRegistry(metrics, queues.length).metrics();
 };
 
 const scanForQueues = async () => {

@@ -48,6 +48,7 @@
   },
   "type": "module",
   "dependencies": {
-    "bullmq": "^5.71.0"
+    "bullmq": "^5.71.0",
+    "prom-client": "^15.1.3"
   }
 }
