@@ -1,8 +1,6 @@
-# bullmq-metrics
+# Monitor BullMQ Jobs with Prometheus and Grafana
 
-Prometheus exporter for [BullMQ](https://bullmq.io/) queues.
-
-The service connects to Redis, discovers BullMQ queues for a configured prefix, and exposes the BullMQ queue metrics on `/metrics` in Prometheus text format.
+If you run background work with BullMQ, you need more than queue names in Redis. You need a quick way to see backlog, active work, completions, and failures across all queues. The [`bullmq-metrics`](https://github.com/okerx/bullmq-metrics) project solves that by discovering BullMQ queues from Redis and exposing a Prometheus-friendly `/metrics` endpoint. If you want the fastest path to production, the Docker image is [`okerx/bullmq-monitor`](https://hub.docker.com/r/okerx/bullmq-monitor).
 
 ## Features
 
@@ -10,50 +8,76 @@ The service connects to Redis, discovers BullMQ queues for a configured prefix, 
 - 🌐 Exposes BullMQ Prometheus metrics over HTTP.
 - 🚢 Ships with Bun-based runtime, and a Docker image.
 
-## Requirements
+## Get started
 
-- [Bun](https://bun.com/) `>= 1.3.11`
-- A reachable Redis instance used by BullMQ
-- BullMQ queues using the configured prefix (defaults to `bull`)
+This guide walks through three steps:
 
-## Quick Start
+- Run the exporter against the Redis instance used by BullMQ
+- Add the exporter as a Prometheus scrape target
+- Import the Grafana dashboard and start monitoring queue health
+
+### What You Get
+
+The exporter exposes queue-level metrics such as:
+
+- `bullmq_job_count{queue, state}`
+- `bullmq_jobs_completed_total{queue}`
+- `bullmq_jobs_failed_total{queue}`
+- `bullmq_jobs_completed_last_minute{queue}`
+- `bullmq_jobs_failed_last_minute{queue}`
+- `bullmq_exporter_queues_discovered`
+
+That gives you visibility into the current backlog, active jobs, throughput, and failure history without hard-coding queue names in the exporter.
+
+### 1. Run the Exporter
+
+#### Option A: Run the Docker Image
 
 ```bash
+docker run --rm \
+  --name bullmq-monitor \
+  -p 3030:3030 \
+  -e REDIS_URL=redis://host.docker.internal:6379 \
+  -e BULLMQ_PREFIX=bull \
+  okerx/bullmq-monitor:latest
+```
+
+If Redis is running in Docker on the same network, replace `host.docker.internal` with the Redis service name.
+
+The exporter listens on:
+
+- `http://localhost:3030/metrics`
+- `http://localhost:3030/healthz`
+
+Quick verification:
+
+```bash
+curl http://localhost:3030/healthz
+curl http://localhost:3030/metrics
+```
+
+#### Option B: Run from Source
+
+```bash
+git clone https://github.com/okerx/bullmq-metrics.git
+cd bullmq-metrics
 bun install
-cp .env.example .env
-bun run start
+REDIS_URL=redis://localhost:6379 bun run start
 ```
 
-The exporter listens on `http://0.0.0.0:3030` by default.
+The main runtime settings are:
 
-## Configuration
+| Variable           | Default                  | Purpose                                               |
+|--------------------|--------------------------|-------------------------------------------------------|
+| `HOST`             | `0.0.0.0`                | HTTP bind host                                        |
+| `PORT`             | `3030`                   | HTTP bind port                                        |
+| `REDIS_URL`        | `redis://127.0.0.1:6379` | Redis connection used for queue discovery and metrics |
+| `BULLMQ_PREFIX`    | `bull`                   | BullMQ Redis key prefix                               |
+| `REDIS_SCAN_COUNT` | `1000`                   | Redis `SCAN COUNT` hint during queue discovery        |
 
-| Variable           | Default                  | Description                                                             |
-|--------------------|--------------------------|-------------------------------------------------------------------------|
-| `HOST`             | `0.0.0.0`                | HTTP bind host                                                          |
-| `PORT`             | `3030`                   | HTTP bind port                                                          |
-| `REDIS_URL`        | `redis://127.0.0.1:6379` | Redis connection string used for queue discovery and metrics collection |
-| `BULLMQ_PREFIX`    | `bull`                   | BullMQ key prefix to scan for queues                                    |
-| `REDIS_SCAN_COUNT` | `1000`                   | Redis `SCAN COUNT` hint used during queue discovery                     |
+### 2. Add the Exporter to Prometheus
 
-Example:
-
-```bash
-HOST=0.0.0.0 \
-PORT=3030 \
-REDIS_URL=redis://localhost:6379 \
-BULLMQ_PREFIX=bull \
-REDIS_SCAN_COUNT=1000 \
-bun run start
-```
-
-## Endpoints
-
-- `GET /metrics` returns BullMQ metrics in Prometheus text format.
-- `GET /healthz` returns a simple JSON health response.
-- `GET /` returns a short plain-text service banner.
-
-## Prometheus Scrape Config
+Add a scrape target for the exporter to your Prometheus configuration:
 
 ```yaml
 scrape_configs:
@@ -63,32 +87,33 @@ scrape_configs:
           - localhost:3030
 ```
 
-## Exposed Metrics
+If Prometheus runs in Docker or Kubernetes, use the exporter's reachable hostname instead of `localhost`.
 
-The exporter exposes queue-level series derived from BullMQ's stored history:
+After reloading Prometheus, test a simple query such as:
 
-- `bullmq_job_count{queue, state}`
-- `bullmq_jobs_completed_total{queue}`
-- `bullmq_jobs_failed_total{queue}`
-- `bullmq_jobs_completed_last_minute{queue}`
-- `bullmq_jobs_failed_last_minute{queue}`
-- `bullmq_exporter_queues_discovered`
+```promql
+bullmq_job_count
+```
 
-`bullmq_jobs_*` is sourced from `queue.getMetrics(...)`. BullMQ stores the total finished job count in `meta.count` and the most recent one-minute bucket in `data[0]`.
+If that returns series, Prometheus is scraping the exporter correctly.
 
-## Grafana Dashboard
+### 3. Import the Grafana Dashboard
 
-An importable Grafana dashboard is available at [`grafana/dashboards/bullmq-overview.json`](./grafana/dashboards/bullmq-overview.json).
+The repository includes a ready-made dashboard at `grafana/dashboards/bullmq-overview.json`.
 
-- Import the JSON through Grafana's dashboard import flow.
-- Grafana should prompt for a Prometheus data source.
-- Use the `Queue` variable to filter the dashboard to one queue, many queues, or the entire fleet.
+To import it:
 
-### BullMQ Worker Prerequisite
+1. Open Grafana.
+2. Go to `Dashboards` -> `New` -> `Import`.
+3. Upload `grafana/dashboards/bullmq-overview.json` from the repository.
+4. Select your Prometheus data source when Grafana prompts for `DS_PROMETHEUS`.
+5. Import the dashboard.
 
-BullMQ only populates completion and failure history if your workers enable metrics collection. Without that, queue state panels still work, but throughput and failure-history panels will stay empty or zero.
+The dashboard includes a `Queue` variable, so you can inspect one queue, several queues, or the full fleet from the same view.
 
-Example worker configuration:
+### 4. Enable BullMQ Worker Metrics
+
+Queue state metrics work without extra BullMQ worker configuration, but completion and failure history panels rely on BullMQ's stored metrics. To populate those panels, enable metrics in your workers:
 
 ```ts
 import { Worker, MetricsTime } from 'bullmq';
@@ -101,23 +126,17 @@ new Worker('email', processor, {
 });
 ```
 
-## Docker
+Without that setting, backlog and active-job panels still work, but throughput and recent failure panels stay empty or flat.
 
-Build:
+### Outcome
 
-```bash
-docker build -t bullmq-metrics .
-```
+At this point you have:
 
-Run:
+- A BullMQ metrics exporter reading queue data from Redis
+- Prometheus scraping BullMQ queue metrics from `/metrics`
+- Grafana visualizing backlog, throughput, and failures with the bundled dashboard
 
-```bash
-docker run --rm \
-  -p 3030:3030 \
-  -e REDIS_URL=redis://redis-instance:6379 \
-  bullmq-metrics
-```
-
+That is enough to move from "BullMQ is running" to "BullMQ is observable."
 
 ## Development
 
